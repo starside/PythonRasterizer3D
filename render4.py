@@ -296,7 +296,9 @@ def colorTriangleZBuffer(verts, width, height, img, color, zbuffer, shader):
                     #calculate texture color
                     #clr[:] = color[:]
                     if not shader.fragment(res, clr):
+                        #clr[0:3] = zv
                         setpix2(x,y, clr, img, width, height)
+
 
 f4 = np.float32
 ninf = -1024.0
@@ -568,6 +570,41 @@ class GouradShader(object):
         texelFromMap(self.texture, luv, intensity, ambient, color)
         return False
 
+
+specd = [
+    ('faces', numba.int32[:,:]),
+    ('verts', numba.float32[:,:]),
+    ('matrix', numba.float32[:,:]),
+    ('varying_verts', numba.float32[:,:]),
+    ('lightdir', numba.float32[:]),
+]
+@jitclass(specd)
+class DepthShader(object):
+    def __init__(self, faces, verts):
+        self.faces = faces
+        self.verts = verts
+        self.varying_verts = np.zeros((4, 4), dtype=np.float32)
+        self.lightdir = np.zeros(4, dtype=np.float32)
+
+    def setMatrix(self, matrix):
+        self.matrix = matrix
+
+    def setLightdir(self, lightdir):
+        self.lightdir = lightdir
+        normalize3(self.lightdir)
+
+    def vertex(self, iface, nthvert, res):
+        v = self.verts[self.faces[iface, nthvert]]
+        dot_py_vecB(self.matrix, v, res)
+        self.varying_verts[0:4, nthvert] = res[0:4]
+
+    def fragment(self, bar, color):
+        r = [0.0, 0.0, 0.0, 0.0]
+        dot_py_vecB(self.varying_verts, bar, r)
+        color[0:3] = int(round(r[2]))   #Copy zbufffer to image buffer
+        return False
+
+
 def main():
     pygame.init()
     screenwidth = 600
@@ -601,7 +638,7 @@ def main():
     numFaces, _fw = np.shape(faces)
 
     """  Calculate Matrices """
-    viewportmatrix = viewPortMatrix(0,0,width,height,1.0)
+    viewportmatrix = viewPortMatrix(0,0,width,height,255.0)
     eye = np.array([0,0,1], dtype=np.float32)
     center = np.array([0, 0, 0], dtype=np.float32)
     up = np.array([0, 1, 0], dtype=np.float32)
@@ -613,6 +650,7 @@ def main():
     calcNormals(vertx, faces, normals)
     gourandNormals = calcGouradNormals(vertx, normals, faces)
     shader = GouradShader(faces, vertx, gourandNormals)  #create shader
+    depthshader = DepthShader(faces, vertx)
     """  Calculate Texture Coordinates """
     alltexcoords = calcTexCoords(faces, texture, texcoords, texmap)
     shader.setTextureMap(alltexcoords)
@@ -634,7 +672,7 @@ def main():
         eye[1] = 0.0
         eye[2] = 1.5*np.cos(angle)
         light[0] = 0
-        light[1] = 0
+        light[1] = 2
         light[2] = 1.5
         """ Move Camera"""
         modelview = lookAtMatrix(eye, center, up)
@@ -653,16 +691,23 @@ def main():
         normalize3(light)
         shader.setLightdir(light)
         shader.setMatrix(tranm)
+        depthshader.setLightdir(light)
+        depthshader.setMatrix(tranm)
         MIT = np.linalg.inv(np.transpose(modelview))
         shader.setNormalMatrix(modelview, MIT)
         screenCoords = np.zeros((3,4), dtype=np.float32)
         col1 = np.array([220, 220, 220], dtype=np.int32)
+        #for i in range(faces.shape[0]):
+        #    for j in range(3):
+        #        depthshader.vertex(i,j, screenCoords[j])
+        #    colorTriangleZBuffer(screenCoords, width, height, striped,col1,zbuffer, depthshader)
+
         for i in range(faces.shape[0]):
             for j in range(3):
                 shader.vertex(i,j, screenCoords[j])
-                transformedVerts[faces[i,j], :] = screenCoords[j,:]
             colorTriangleZBuffer(screenCoords, width, height, striped,col1,zbuffer, shader)
-        #divbyz(transformedVerts)
+
+
 
         #drawLitTris(transformedVerts, faces, normals, light, striped, zbuffer, texture, alltexcoords)
         surfdemo_show(striped, zbuffer, 'striped')
